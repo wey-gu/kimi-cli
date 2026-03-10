@@ -16,6 +16,7 @@ from typing_extensions import TypedDict
 
 from kosong.chat_provider import (
     ChatProvider,
+    ChatProviderError,
     RetryableChatProvider,
     StreamedMessagePart,
     ThinkingEffort,
@@ -255,7 +256,7 @@ class OpenAILegacyStreamedMessage:
     ) -> AsyncIterator[StreamedMessagePart]:
         self._id = response.id
         self._usage = response.usage
-        message = response.choices[0].message
+        message = _get_non_stream_message(response)
         reasoning_key = self._reasoning_key
         if reasoning_key and (reasoning_content := getattr(message, reasoning_key, None)):
             assert isinstance(reasoning_content, str)
@@ -321,6 +322,36 @@ class OpenAILegacyStreamedMessage:
                         pass
         except (OpenAIError, httpx.HTTPError) as e:
             raise convert_error(e) from e
+
+
+def _response_summary(response: ChatCompletion, choices: object) -> str:
+    if isinstance(choices, list):
+        choices_summary = f"list[{len(choices)}]"
+    else:
+        choices_summary = type(choices).__name__
+    return (
+        f"id={getattr(response, 'id', None)!r}, "
+        f"model={getattr(response, 'model', None)!r}, "
+        f"object={getattr(response, 'object', None)!r}, "
+        f"choices={choices_summary}"
+    )
+
+
+def _get_non_stream_message(response: ChatCompletion):
+    choices = getattr(response, "choices", None)
+    if not isinstance(choices, list) or not choices:
+        raise ChatProviderError(
+            "OpenAI-compatible non-stream response missing choices[0]. "
+            f"Invalid chat completion payload ({_response_summary(response, choices)})."
+        )
+
+    message = getattr(choices[0], "message", None)
+    if message is None:
+        raise ChatProviderError(
+            "OpenAI-compatible non-stream response missing choices[0].message. "
+            f"Invalid chat completion payload ({_response_summary(response, choices)})."
+        )
+    return message
 
 
 if __name__ == "__main__":
